@@ -1,0 +1,2 @@
+class Transcoder:
+	pass
