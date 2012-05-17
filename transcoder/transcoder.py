@@ -1,8 +1,7 @@
-import mutagen.flac
-from mutagen.easyid3 import EasyID3
-from mutagen.mp3 import MP3
+import pyflacmeta
 import os
 import os.path
+import stagger
 import subprocess
 
 class Transcoder:
@@ -35,49 +34,58 @@ class Transcoder:
         return False
         
     def metadatacorrect(self, flacfile):
-        audio = mutagen.flac.FLAC(flacfile)
-        tagdict = dict(audio.tags)
+        tags = self.get_tags(flacfile)
+        tagdict = tags.tags()
         required_tags = set(["artist", "album", "title", "date", 
                              "tracknumber", "tracktotal", "discnumber",
                             "disctotal"])
         present_tags = set([key.lower() for key in tagdict.keys()])
         if required_tags - present_tags:
-            print "Missing some tags in", flacfile
-        if present_tags - required_tags:
-            for tag in present_tags - required_tags:
-                del(audio[tag])
-            audio.save()
+            return False
+        flacfilename = os.path.basename(flacfile)
+        title = tags["TITLE"].replace("/", "-")
+        tracknumber = "%02d" % int(tags["TRACKNUMBER"])
+        properfilename = tracknumber + " " + title + ".flac"
+        if flacfilename != properfilename:
+            return False
         return True
         
     def get_tags(self, flacfile):
-        audio = mutagen.flac.FLAC(flacfile)
-        return dict(audio.tags)
+        audio = pyflacmeta.FLAC(flacfile)
+        return audio
         
-    def tag_mp3(self, mp3file, tags):
-        del tags["disctotal"]
-        del tags["tracktotal"]
-        audio = MP3(mp3file, ID3=EasyID3)
-        for tag, value in tags.iteritems():
-            audio[tag] = value[0]
-        audio.save()
+    def tag_mp3(self, mp3file, tags, artpath):
+        pass
+        tag = stagger.read_tag(mp3file)
+        tag.artist = tags["ARTIST"]
+        tag.album = tags["ALBUM"]
+        tag.title = tags["TITLE"]
+        tag.track = tags["TRACKNUMBER"]
+        tag.track_total = tags["TRACKTOTAL"]
+        tag.disc = tags["DISCNUMBER"]
+        tag.disc_total = tags["DISCTOTAL"]
+        tag.date = tags["DATE"]
+        tag.picture = artpath
+        tag.write()
         
     def transcodefile(self, flacfile, mp3file):
-        print "Transcoding", flacfile
+        print("Transcoding", flacfile)
         flaccommand = ["flac", "-s", "-c", "-d", flacfile]
         lamecommand = ["lame", "--silent", "--add-id3v2", "-V", "2", "-", mp3file]
         p1 = subprocess.Popen(flaccommand, stdout=subprocess.PIPE)
         p2 = subprocess.Popen(lamecommand, stdin=p1.stdout)
         p1.stdout.close()
         p2.communicate()
-        print "Done encoding"
+        folderpath = os.path.dirname(flacfile)
+        artname = os.path.basename(folderpath) + ".jpg"
+        artpath = os.path.join(folderpath, artname)
         tags = self.get_tags(flacfile)
-        self.tag_mp3(mp3file, tags)
+        self.tag_mp3(mp3file, tags, artpath)
 
     def transcode(self):
         for (root, dirs, files) in os.walk(self.flacpath):
-            print root, dirs, files
-            if files and dirs:
-                print "Unwanted files in", root
+            if files and dirs and files != [".DS_Store"]:
+                print("Unwanted files in", root)
                 break
             elif dirs:
                 mp3root = self.getmp3path(root)
@@ -85,26 +93,22 @@ class Transcoder:
                     mp3dir = os.path.join(mp3root, dir)
                     if not os.path.exists(mp3dir):
                         os.mkdir(mp3dir)
-                pass
             elif files:
                 if not self.filedepthvalid(root):
-                    print "Files at incorrect level in", root
+                    print("Files at incorrect level in", root)
                     continue
                 if not self.extensionsvalid(root, files):
-                    print "Missing or incorrect file extensions in", root
+                    print("Missing or incorrect file extensions in", root)
                     continue
                 for file in files:
                     extension = os.path.splitext(file)[1]
                     if extension == ".flac":
                         flacfile = os.path.join(root, file)
                         mp3file = self.getmp3path(flacfile)
+                        if os.path.isfile(mp3file):
+                            if os.path.getmtime(mp3file) > os.path.getmtime(flacfile):
+                                continue
                         if not self.metadatacorrect(flacfile):
-                            print "Incorrect metadata in", flacfile
+                            print("Incorrect metadata in", flacfile)
                             continue
-                        if not os.path.isfile(mp3file):
-                            print "mp3 didn't exist"
-                            self.transcodefile(flacfile, mp3file)
-                        else:
-                            if os.path.getmtime(mp3file) < os.path.getmtime(flacfile):
-                                print "mp3 existed but was older than flac"
-                                self.transcodefile(flacfile, mp3file)
+                        self.transcodefile(flacfile, mp3file)

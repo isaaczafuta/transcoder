@@ -1,1 +1,1 @@
-from transcoder import Transcoder
+from .transcoder import Transcoder
